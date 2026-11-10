@@ -1,0 +1,55 @@
+name: WorkBuddy 每日签到
+
+on:
+  schedule:
+    # 每天北京时间 00:02 (UTC 16:02 前一天)
+    - cron: '2 16 * * *'
+  workflow_dispatch: # 支持手动触发
+
+jobs:
+  checkin:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 写入多账号凭证
+        env:
+          WORKBUDDY_ACCOUNTS: ${{ secrets.WORKBUDDY_ACCOUNTS }}
+        run: |
+          mkdir -p auths
+          if [ -z "$WORKBUDDY_ACCOUNTS" ]; then
+            echo "未设置 WORKBUDDY_ACCOUNTS secret，跳过"
+            exit 1
+          fi
+          echo "$WORKBUDDY_ACCOUNTS" | python3 -c '
+          import sys, json, os
+          data = json.load(sys.stdin)
+          if not isinstance(data, list):
+              data = [data]
+          for acc in data:
+              uid = (acc.get("account", {}) or {}).get("uid") or acc.get("uid")
+              if not uid:
+                  raise SystemExit("凭证缺少 uid，无法写入")
+              path = f"auths/workbuddy-{uid}.json"
+              with open(path, "w", encoding="utf-8") as f:
+                  json.dump(acc, f, indent=2, ensure_ascii=False)
+          print(f"已写入 {len(data)} 个账号凭证")
+          '
+
+      - name: 执行签到 + Bark 通知
+        env:
+          BARK_URL: ${{ secrets.BARK_URL }}
+        run: python3 workbuddy_checkin.py signin
+
+      - name: 查询积分
+        run: python3 workbuddy_checkin.py credit
+
+      - name: 清理凭证
+        if: always()
+        run: rm -rf auths/
